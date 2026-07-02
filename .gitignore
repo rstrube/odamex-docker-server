@@ -1,0 +1,9 @@
+# Copyrighted game data — never commit IWADs/PWADs
+wads/*
+!wads/.gitkeep
+ 
+# Local secrets/host-specific values
+.env
+ 
+# Runtime server state (bind-mounted, host-generated)
+odahome/
