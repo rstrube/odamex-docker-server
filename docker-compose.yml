@@ -12,7 +12,6 @@ services:
     environment:
       - ODAMEX_UID=${ODAMEX_UID:-1000}
       - ODAMEX_GID=${ODAMEX_GID:-1000}
-      - ODAMEX_CONFIG=${ODAMEX_CONFIG:-config.cfg}
     volumes:
       - ./wads:/wads:ro
       - ./configs:/configs:ro
@@ -20,4 +19,4 @@ services:
     command: >
       -iwad /wads/DOOM2.WAD
       -waddir /wads
-      +exec /configs/${ODAMEX_CONFIG}
+      +exec /configs/${ODAMEX_CONFIG:-config.cfg}
