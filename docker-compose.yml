@@ -22,4 +22,5 @@ services:
     command: >
       -iwad /wads/DOOM2.WAD
       -waddir /wads
+      +set sv_upnp 0
       +exec /configs/${ODAMEX_CONFIG:-config.cfg}
