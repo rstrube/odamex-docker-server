@@ -6,4 +6,5 @@ wads/*
 .env
  
 # Runtime server state (bind-mounted, host-generated)
-odahome/
+odahome/*
+!odahome/.gitkeep
