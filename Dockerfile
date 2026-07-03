@@ -38,7 +38,8 @@ RUN git clone --depth 1 --branch "${REPO_TAG}" "${REPO_URL}" odamex
 
 WORKDIR /build/odamex
 
-# Hook for local patches. Empty by default — drop .patch files into
+# Hook for local patches, same pattern used for the NetDuke32 GCC 15
+# compatibility fixes. Empty by default — drop .patch files into
 # ./patches/ before building if a future toolchain needs a workaround.
 COPY patches/ /patches/
 RUN shopt -s nullglob \
@@ -58,7 +59,15 @@ RUN cmake -W no-dev \
         -D CMAKE_C_FLAGS="-w" \
         -D CMAKE_CXX_FLAGS="-w" \
         .. \
-    && cmake --build . --parallel "$(nproc)" --target odasrv
+    && cmake --build . --parallel "$(nproc)" --target odasrv odawad
+# IMPORTANT: build BOTH odasrv AND odawad. The wad is produced by a
+# separate `odawad` custom target, and odasrv does NOT depend on it
+# (the dependency runs the other way: odawad depends on odasrv). So
+# `--target odasrv` alone silently skips wad generation entirely — the
+# build succeeds but no odamex.wad is ever created, and the runtime
+# COPY then fails. Upstream's own Dockerfile has this same latent bug;
+# it only builds `--target odasrv`. Building odawad pulls in odasrv as
+# a dependency and also copies the wad next to the binary in server/.
 
 # --- Runtime stage -------------------------------------------------------
 FROM ubuntu:26.04
