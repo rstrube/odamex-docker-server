@@ -7,15 +7,18 @@ services:
         REPO_TAG: ${ODAMEX_VERSION:-12.2.1}
     container_name: odamex
     restart: unless-stopped
+    # Run as the image's built-in ubuntu user (UID/GID 1000). Override in
+    # .env if your host user isn't 1000, so bind-mounted files stay
+    # correctly owned. No root, no gosu — the container never runs as root.
+    user: "${ODAMEX_UID:-1000}:${ODAMEX_GID:-1000}"
+    # Raw UDP — bypasses Caddy entirely, same as the Minecraft pattern.
+    # Router needs a matching UDP 10666 forward -> 192.168.1.201.
     ports:
       - "10666:10666/udp"
-    environment:
-      - ODAMEX_UID=${ODAMEX_UID:-1000}
-      - ODAMEX_GID=${ODAMEX_GID:-1000}
     volumes:
       - ./wads:/wads:ro
       - ./configs:/configs:ro
-      - ./odahome:/home/doomguy/.odamex
+      - ./odahome:/home/ubuntu/.odamex
     command: >
       -iwad /wads/DOOM2.WAD
       -waddir /wads

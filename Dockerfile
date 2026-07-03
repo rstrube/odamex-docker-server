@@ -76,8 +76,18 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV INSTALL_DIR=/usr/local/games/odamex
 
 RUN apt-get update -qq \
-    && apt-get install -y --no-install-recommends tini gosu \
+    && apt-get install -y --no-install-recommends tini \
     && rm -rf /var/lib/apt/lists/*
+
+# We run the server as the base image's built-in 'ubuntu' user (UID 1000,
+# GID 1000), selected via the compose `user:` directive. No root, no
+# runtime user creation, no gosu privilege drop — the container never
+# runs as root at any point. This assumes the host user is also UID 1000
+# (true across this homelab); if it isn't, set `user:` in compose/.env to
+# the correct value. Make sure ubuntu's home exists and is owned by it,
+# since odasrv writes state under ~/.odamex.
+RUN mkdir -p /home/ubuntu/.odamex \
+    && chown -R ubuntu:ubuntu /home/ubuntu
 
 RUN mkdir -p "${INSTALL_DIR}"
 COPY --from=build /build/odamex/build/server/odasrv ${INSTALL_DIR}/
@@ -91,12 +101,16 @@ COPY --from=build /build/odamex/build/server/odasrv ${INSTALL_DIR}/
 COPY --from=build /build/odamex/build/wad/odamex.wad ${INSTALL_DIR}/odamex.wad
 
 COPY odamex-server.sh /usr/local/bin/odamex-server
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /usr/local/bin/odamex-server /entrypoint.sh
+RUN chmod +x /usr/local/bin/odamex-server
 
-# Mapped to a host UID/GID so bind-mounted wads/config/home directories
-# keep sane ownership on the odroid host filesystem. Set via .env.
-ENV ODAMEX_UID= \
-    ODAMEX_GID=
+# HOME must be set explicitly: Docker does NOT populate HOME from
+# /etc/passwd when a container runs under the `user:` directive, so
+# without this odasrv wouldn't know where ~/.odamex is.
+ENV HOME=/home/ubuntu
 
-ENTRYPOINT ["tini", "--", "/entrypoint.sh"]
+# tini stays as PID 1 for signal forwarding + zombie reaping (it runs
+# fine as the non-root ubuntu user). The privilege-drop entrypoint script
+# is gone — there's nothing to drop from, since compose starts us as
+# ubuntu directly. `-host` is baked in here; the wad/config args come
+# from the compose `command:`.
+ENTRYPOINT ["tini", "--", "/usr/local/bin/odamex-server", "-host"]
