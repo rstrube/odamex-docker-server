@@ -1,66 +1,153 @@
 # odamex-docker-server
 
-Dockerized [Odamex](https://odamex.net/) dedicated server (`odasrv`), built from source. Compiles natively for whatever architecture it's built on — ARM64, x86-64, etc.
+A Dockerized [Odamex](https://odamex.net/) dedicated server (`odasrv`), built
+from source in a multi-stage image. It compiles natively for whatever
+architecture you build on (x86-64, ARM64, etc.) rather than shipping a
+prebuilt binary, and runs as an unprivileged, non-root user by default.
 
-## Repo contents
+---
 
-```
-.
-├── Dockerfile            # multi-stage: compiles odasrv (server-only)
-├── docker-compose.yml    # deployment: UDP 10666, bind mounts, .env-driven
-├── entrypoint.sh         # tini + gosu privilege drop
-├── odamex-server.sh      # launch wrapper
-├── patches/              # optional .patch hook for toolchain fixes
-├── configs/
-│   └── config.cfg        # deathmatch-tuned server config
-└── wads/                 # IWAD lives here (DOOM2.WAD is gitignored)
-```
+## Features
 
-## Requirements
+- **Builds from source** — pins a specific Odamex release tag and compiles
+  it in-container, so you get a native binary for your host architecture
+  with no prebuilt-binary trust issues.
+- **Server-only** — compiles just `odasrv`, skipping the client/launcher and
+  their SDL2/wxWidgets dependencies entirely.
+- **Runs unprivileged** — the container runs as a regular non-root user, not
+  root with a privilege drop.
+- **Proper signal handling** — uses `tini` as PID 1, so `docker stop` and
+  friends work cleanly instead of leaving zombie processes or ignoring
+  signals.
+- **Config-driven** — server behavior lives in mountable `.cfg` files, no
+  image rebuild needed to change gameplay settings.
 
-- Docker Engine + Compose plugin
-- A legally-owned `DOOM2.WAD` (or another Doom/Doom II IWAD, or Freedoom)
+---
 
-## Setup
-
-```bash
-git clone <this-repo> odamex && cd odamex
-cp .env.example .env          # then edit UID/GID to match your host
-```
-
-Drop your `DOOM2.WAD` into `wads/`. It's gitignored — it's copyrighted game data and never gets committed.
-
-Set `ODAMEX_UID` / `ODAMEX_GID` in `.env` to your host user's `id -u` / `id -g` so the bind-mounted directories stay correctly owned.
-
-## Run
+## Quick start
 
 ```bash
-docker compose build     # compiles odasrv from source (first build is slow)
+git clone https://github.com/<you>/odamex-docker-server.git
+cd odamex-docker-server
+```
+
+Place a legally-owned `DOOM2.WAD` (or another Doom/Doom II IWAD, or Freedoom)
+in `./wads/` — it's gitignored, you supply your own.
+
+Create a `.env` file to override defaults if needed (all optional):
+
+```bash
+ODAMEX_VERSION=12.2.1   # Odamex git tag to build
+ODAMEX_UID=1000         # match your host user, for bind-mount permissions
+ODAMEX_GID=1000
+ODAMEX_CONFIG=example.cfg
+```
+
+Then build and run:
+
+```bash
+docker compose build     # compiles odasrv from source
 docker compose up -d
 docker compose logs -f
 ```
 
-The pinned Odamex version is set by `ODAMEX_VERSION` in `.env`; bump it and rebuild to upgrade.
+Connect with a client:
 
-## Network
+```bash
+odamex -connect <host>:10666
+```
 
-Raw UDP — no reverse proxy involved. Forward **UDP 10666** on your router to the host running this container. That's the only exposure needed.
+---
 
-## Config
+## Repo layout
 
-Server behavior lives in `configs/config.cfg` (gametype, fraglimit, warmup, etc.). Change the `rcon_password` before exposing this publicly.
+```
+.
+├── Dockerfile            # multi-stage: compiles odasrv + odamex.wad
+├── docker-compose.yml    # deployment: UDP 10666, user directive, bind mounts
+├── odamex-server.sh      # launch wrapper (cd to install dir, exec odasrv)
+├── patches/              # optional .patch hook for toolchain fixes (empty)
+├── configs/
+│   └── example.cfg       # minimal MAP01 deathmatch config
+├── wads/                 # IWAD lives here (gitignored; .gitkeep tracked)
+└── odahome/              # runtime server state, mounted to ~/.odamex (.gitkeep tracked)
+```
 
-## Custom WADs
+---
 
-Drop a PWAD into `wads/` and extend the compose `command:`:
+## Configuration (`configs/*.cfg`)
+
+Which config loads is controlled by `ODAMEX_CONFIG` (defaults to
+`example.cfg`):
+
+```bash
+ODAMEX_CONFIG=myconfig.cfg docker compose up -d
+```
+
+Server behavior is set via `set <cvar> "<value>"` lines. Full cvar
+reference: https://odamex.net/wiki/Variables, or run `cvarlist` in the
+server console for what's available in your build.
+
+A few things worth knowing about cvar timing:
+
+- Most `sv_*` gameplay cvars (fraglimit, maxplayers, etc.) just need to be
+  in the `.cfg` file — they're read after it's `+exec`'d.
+- A few cvars (e.g. `sv_upnp`) are read during network init, *before* the
+  config loads. Those need to be passed as `+set sv_upnp 0` on the command
+  line instead (see the `command:` block in `docker-compose.yml`).
+- `sv_freelook` / `sv_allowjump` are server-authoritative — they override
+  whatever the client has set locally.
+- Some cvars (e.g. `sv_gametype`) are latched and only apply after a map
+  change.
+
+**Change `rcon_password` before exposing a server publicly.**
+
+---
+
+## Loading a custom PWAD
+
+Additional wads (custom maps, mods) are bind-mounted from `./wads`, so
+adding one doesn't require rebuilding the image — just extend the compose
+`command:`:
 
 ```yaml
 command: >
   -iwad /wads/DOOM2.WAD
   -waddir /wads
-  -file /wads/your_map.wad
-  +exec /configs/config.cfg
+  -file /wads/mymap.wad
+  +exec /configs/${ODAMEX_CONFIG:-example.cfg}
   +map MAP01
 ```
 
-Then `docker compose up -d` to recreate with the new args (a `restart` won't pick up command changes).
+Run `docker compose up -d` (not `restart`) to pick up the new command, and
+make sure clients have a matching copy of the PWAD.
+
+---
+
+## Building — things to know
+
+- `python3` is required in the build stage: Odamex generates `odamex.wad`
+  via a Python script at build time, and CMake silently skips it without
+  Python present.
+- The build targets `odasrv odawad` rather than just `odasrv`, since the wad
+  is produced by a separate target that `odasrv` doesn't depend on.
+- Drop `.patch` files into `patches/` if you need to patch the Odamex source
+  before building (e.g. for toolchain compatibility); empty by default.
+- Bump `ODAMEX_VERSION` in `.env` and rebuild to pick up a new Odamex
+  release.
+
+---
+
+## Requirements
+
+- Docker Engine + Compose plugin.
+- A legally-owned `DOOM2.WAD` (or another Doom/Doom II IWAD, or Freedoom —
+  adjust the `-iwad` path accordingly). Not committed; supply your own.
+
+## What's gitignored
+
+- `wads/*` (IWADs/PWADs — copyrighted game data), keeping `wads/.gitkeep`.
+- `odahome/*` (runtime state), keeping `odahome/.gitkeep` so a fresh clone
+  gets a directory owned by the cloning user rather than Docker creating it
+  as root.
+- `.env` (host-specific values / potential secrets).
